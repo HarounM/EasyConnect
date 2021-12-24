@@ -110,6 +110,6 @@ Project Link: [https://github.com/HarounM/EasyConnect](https://github.com/Haroun
 [license-shield]: https://img.shields.io/github/license/github_username/repo_name.svg?style=for-the-badge
 [license-url]: https://github.com/HarounM/EasyConnect/blob/master/LICENSE.txt
 [linkedin-shield]: https://img.shields.io/badge/-LinkedIn-black.svg?style=for-the-badge&logo=linkedin&colorB=555
-[linkedin-url]: https://linkedin.com/in/linkedin_username
+[linkedin-url]: https://www.linkedin.com/in/haroun-maghraoui-08021a1b3/
 [product-screenshot]: images/screenshot.png
 
