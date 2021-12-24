@@ -1,0 +1,351 @@
+#!/usr/bin/env bash
+
+# Saving original stty settings
+# shellcheck disable=SC2155
+old_stty="$(stty -g)"
+
+# Hiding the cursor and clearing the screen
+printf '\x1b[?1049h\x1b[?25l'
+
+# Setting traps
+trap 'cleanup' EXIT
+trap 'cleanup; kill -s SIGSTOP $$' TSTP
+trap 'exit' INT
+trap 'init;main;' WINCH
+
+# Saving current page
+page=loading
+
+# Determining which package manager is available.
+if command -v apt >/dev/null 2>&1; then
+	pkgmanager=apt
+elif command -v yum >/dev/null 2>&1; then
+	pkgmanager=yum
+elif command -v pacman >/dev/null 2>&1; then
+	pkgmanager=pacman
+elif command -v dnf >/dev/null 2>&1; then
+	pkgmanager=dnf
+elif command -v homebrew >/dev/null 2>&1; then
+	pkgmanager=homebrew
+fi
+
+checkWinSize() {
+	local width=$(stty size | cut -d ' ' -f 2)
+	local height=$(stty size | cut -d ' ' -f 1)
+	local RowCursor=$(($height / 2 - 3))
+	if [ "$width" -le 95 ]; then
+		drawBox width height
+		printf '\x1b[%d;%dHWindow size too small.' "$((RowCursor++))" "$(($width / 2 - 11))"
+		printf '\x1b[%d;%dHPlease expand it to be at least Axb.' "$((RowCursor++))" "$(($width / 2 - 18))"
+		printf '\x1b[%d;%dHCurrent window size : %dX%d' "$((RowCursor++))" "$(($width / 2 - 13))" "$width" "$height"
+		checkWinSize
+	fi
+}
+
+init() {
+	stty -echo
+	# Moving to the alternative screen buffer
+	printf '\x1b[2J'
+	checkWinSize
+
+}
+
+cleanup() {
+	# resetting original settings
+	stty "${old_stty}"
+	# Clear the screen, show the cursor and return to the main screen buffer
+	printf '\x1b[2J\x1b[?25h\x1b[?1049l'
+
+}
+
+drawBanner() {
+	#usage:drawBanner terminalWidth terminalHeight
+	local row=$(($2 / 2 - 6))
+	local column=$(($1 / 2 - 47))
+	banner="\x1b[$((row++));${column}H███████╗ █████╗ ███████╗██╗   ██╗ ██████╗ ██████╗ ███╗   ██╗███╗   ██╗███████╗ ██████╗████████╗\x1b[$((row++));${column}H██╔════╝██╔══██╗██╔════╝╚██╗ ██╔╝██╔════╝██╔═══██╗████╗  ██║████╗  ██║██╔════╝██╔════╝╚══██╔══╝\x1b[$((row++));${column}H█████╗  ███████║███████╗ ╚████╔╝ ██║     ██║   ██║██╔██╗ ██║██╔██╗ ██║█████╗  ██║        ██║\x1b[$((row++));${column}H██╔══╝  ██╔══██║╚════██║  ╚██╔╝  ██║     ██║   ██║██║╚██╗██║██║╚██╗██║██╔══╝  ██║        ██║\x1b[$((row++));${column}H███████╗██║  ██║███████║   ██║   ╚██████╗╚██████╔╝██║ ╚████║██║ ╚████║███████╗╚██████╗   ██║\x1b[$((row++));${column}H╚══════╝╚═╝  ╚═╝╚══════╝   ╚═╝    ╚═════╝ ╚═════╝ ╚═╝  ╚═══╝╚═╝  ╚═══╝╚══════╝ ╚═════╝   ╚═╝\x1b[$((row++));${column}H"
+	# shellcheck disable=SC2059
+	printf "$banner"
+}
+
+checks() {
+	#usage: checks terminalWidth terminalHeight
+	missing=0
+	local middle=$(($1 / 2))
+	local row=$(($2 / 2 + 3))
+	if command -v ssh >/dev/null 2>&1; then
+		printf '\x1b[%d;%dH\x1b[32;40m\x1b[1mSSH is available.\x1b[0m' "$((row++))" "$((middle - 8))"
+		sleep 0.3
+		nossh=0
+	else
+		printf '\x1b[%d;%dH\x1b[31;40mIt looks like no SSH client is available.\x1b[0m' "$((row++))" "$((middle - 20))"
+		sleep 0.3
+		nossh=1
+		missing=1
+	fi
+	# Checking for an ftp clients despite Linux, BSD and MacOS having it natively
+	if command -v ftp >/dev/null 2>&1; then
+		printf '\x1b[%d;%dH\x1b[32;40m\x1b[1mFTP is available.\x1b[0m' "$((row++))" "$((middle - 8))"
+		noftp=0
+		sleep 0.3
+	else
+		printf '\x1b[%d;%dH\x1b[31;40mIt looks like no FTP client is available.\x1b[0m' "$((row++))" "$((middle - 20))"
+		sleep 0.3
+		noftp=1
+		missing=1
+	fi
+	if command -v curl >/dev/null 2>&1 || command -v http >/dev/null 2>&1; then
+		printf '\x1b[%d;%dH\x1b[32;40m\x1b[1mHTTP and HTTPS are available.\x1b[0m' "$((row++))" "$((middle - 14))"
+		sleep 0.3
+		nohttp=0
+	else
+		printf '\x1b[%d;%dH\x1b[31;40mIt looks like no HTTP/HTTPS client is available.\x1b[0m' "$((row++))" "$((middle - 24))"
+		sleep 0.3
+		nohttp=1
+		missing=1
+	fi
+
+}
+
+packageInstall() {
+	#usage: packageInstall terminalWidth terminalHeight
+	local column=$(($1 / 4))
+	local row=16
+	if [ "${missing}" -eq 1 ]; then
+		printf '\x1b[%d;%dHTo install missing clients, copy-paste this command to your terminal:' "$((row++))" "$column"
+		if [ "$nossh" -eq 1 ]; then
+			case "$pkgmanager" in
+			apt)
+				printf '\x1b[%d;%dHsudo apt install openssh-client' "$((row++))" "$column"
+				;;
+			yum)
+				printf '\x1b[%d;%dHsudo yum install openssh-clients' "$((row++))" "$column"
+				;;
+			pacman)
+				printf '\x1b[%d;%dHsudo pacman -S openssh' "$((row++))" "$column"
+				;;
+			dnf)
+				printf '\x1b[%d;%dHsudo dnf install openssh' "$((row++))" "$column"
+				;;
+			brew)
+				printf '\x1b[%d;%dHbrew install openssh' "$((row++))" "$column"
+				;;
+			*)
+				printf '\x1b[%d;%dHSorry your package manager is not supported.' "$((row++))" "$column"
+				;;
+			esac
+
+		fi
+
+		if [ "$nohttp" -eq 1 ]; then
+			case "$pkgmanager" in
+			apt)
+				printf '\x1b[%d;%dHsudo apt install httpie' "$((row++))" "$column"
+				;;
+			yum)
+				printf '\x1b[%d;%dHsudo yum install httpie' "$((row++))" "$column"
+				;;
+			pacman)
+				printf '\x1b[%d;%dHsudo pacman -S httpie' "$((row++))" "$column"
+				;;
+			dnf)
+				printf '\x1b[%d;%dHsudo dnf install httpie' "$((row++))" "$column"
+				;;
+			brew)
+				printf '\x1b[%d;%dHbrew install httpie' "$((row++))" "$column"
+				;;
+			*)
+				printf '\x1b[%d;%dHSorry your package manager is not supported.' "$((row++))" "$column"
+				;;
+			esac
+
+		fi
+		if [ "$noftp" -eq 1 ]; then
+			case "$pkgmanager" in
+			apt)
+				printf '\x1b[%d;%dHsudo apt install inetutils' "$((row++))" "$column"
+				;;
+			yum)
+				printf '\x1b[%d;%dHsudo yum install inetutils' "$((row++))" "$column"
+				;;
+			pacman)
+				printf '\x1b[%d;%dHsudo pacman -S inetutils' "$((row++))" "$column"
+				;;
+			dnf)
+				printf '\x1b[%d;%dHsudo dnf install inetutils' "$((row++))" "$column"
+				;;
+			brew)
+				printf '\x1b[%d;%dHbrew install inetutils' "$((row++))" "$column"
+				;;
+			*)
+				printf '\x1b[%d;%dHSorry your package manager is not supported.' "$((row++))" "$column"
+				;;
+			esac
+
+		fi
+		printf '\x1b[%d;%dHPress any key to continue.' "$((row++))" "$(($2 / 2 - 13))"
+		read -rsn1
+	fi
+
+}
+
+horizontalLine() {
+	#usage: horizontalLine position length
+	local i=1
+	case $1 in
+	-t | --top)
+		border+='╔'
+		while [ "$i" -le "$2" ]; do
+			border+='═'
+			((i++))
+		done
+		border+='╗'
+		;;
+	-b | --bottom)
+		border+='╚'
+		while [ "$i" -le "$2" ]; do
+			border+='═'
+			((i++))
+		done
+		border+='╝'
+		;;
+	esac
+}
+
+verticalLine() {
+	#usage: verticalLine margin width length
+	local i=1
+	if [ "$1" -eq 0 ]; then
+		while [ "$i" -le "$3" ]; do
+			border+="║\x1b[$2C║\n"
+			((i++))
+		done
+	else
+		while [ "$i" -le "$3" ]; do
+			border+="\x1b[$1C║\x1b[$2C║\n"
+			((i++))
+		done
+		border+="\x1b[$1C"
+	fi
+
+}
+
+drawLoading() {
+	page=loading
+	local width=$(stty size | cut -d ' ' -f 2)
+	local height=$(stty size | cut -d ' ' -f 1)
+	drawBanner "$width" "$height"
+	checks "$width" "$height"
+	packageInstall "$width" "$height"
+	page=selection
+}
+
+drawBox() {
+	#usage: drawBox terminalWidth terminalHeight
+	border=''
+	local boxColumnCursor=$(($1 / 2 - 20))
+	printf '\x1b[%d;%dH' "$(($2 / 2 - 4))" "$boxColumnCursor"
+	horizontalLine -t 42
+	border+='\n'
+	verticalLine "$((boxColumnCursor - 1))" 42 8
+	horizontalLine --bottom 42
+	# shellcheck disable=SC2059
+	printf "$border"
+
+}
+
+drawHelp() {
+	#usage: drawHelp terminalWidth terminalHeight
+	local bar=''
+	local i=1
+	while [ "$i" -le "$1" ]; do
+		bar+='_'
+		((i++))
+	done
+	bar+='\n'
+	bar+="Arrow keys: navigation |Enter: Select |ESC: Exit |Backspace: return"
+	printf '\x1b[%d;1H' "$(($2 - 1))"
+	# shellcheck disable=SC2059
+	printf "$bar"
+}
+
+selection() {
+	#usage: selection terminalWidth terminalHeight
+	local RowCursor=$(($2 / 2 - 3))
+	selectionLines=4
+	printf '\x1b[%d;%dHWhat protocol are we using today ?' "$((RowCursor++))" "$(($1 / 2 - 17))"
+	if [ "$highlight" -eq 0 ]; then
+		printf '\x1b[%d;%dH\x1b[30;47mssh\x1b[0m' "$((RowCursor++))" "$(($1 / 2 - 2))"
+	else
+		printf '\x1b[%d;%dHssh' "$((RowCursor++))" "$(($1 / 2 - 2))"
+	fi
+	if [ "$highlight" -eq 1 ]; then
+		printf '\x1b[%d;%dH\x1b[30;47mftp\x1b[0m' "$((RowCursor++))" "$(($1 / 2 - 2))"
+	else
+		printf '\x1b[%d;%dHftp' "$((RowCursor++))" "$(($1 / 2 - 2))"
+	fi
+	if [ "$highlight" -eq 2 ]; then
+		printf '\x1b[%d;%dH\x1b[30;47mhttp\x1b[0m' "$((RowCursor++))" "$(($1 / 2 - 2))"
+	else
+		printf '\x1b[%d;%dHhttp' "$((RowCursor++))" "$(($1 / 2 - 2))"
+	fi
+	if [ "$highlight" -eq 3 ]; then
+		printf '\x1b[%d;%dH\x1b[30;47mhttps\x1b[0m' "$((RowCursor++))" "$(($1 / 2 - 2))"
+	else
+		printf '\x1b[%d;%dHhttps' "$((RowCursor++))" "$(($1 / 2 - 2))"
+	fi
+
+}
+
+
+drawAll() {
+	#usage: margin page
+	local width=$(stty size | cut -d ' ' -f 2)
+	local height=$(stty size | cut -d ' ' -f 1)
+	drawBox "$width" "$height"
+	"$1" "$width" "$height"
+	drawHelp "$width" "$height"
+
+}
+
+highlight=0
+
+keystroke_handler() {
+	read -t 0.01 -rsn 4 keystroke
+	case "${keystroke}" in
+	$'\x1b')
+		cleanup
+		exit
+		;;
+	$'\x1b[A')
+		local limit="${page}"Lines
+		((highlight = --highlight % ${!limit}))
+		if ((highlight < 0)); then ((highlight += ${!limit})); fi
+		main
+		;;
+	$'\x1b[B')
+		local limit="${page}"Lines
+		((highlight = ++highlight % ${!limit}))
+		main
+		;;
+	$'\x1b[C')
+		cleanup
+		exit
+		;;
+	$'\x1b[D')
+		cleanup
+		exit
+		;;
+	esac
+}
+
+main() {
+	drawAll "$page"
+	while :; do
+		keystroke_handler
+	done
+}
+
+init
+drawLoading
+init
+main
